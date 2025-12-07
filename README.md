@@ -7,26 +7,26 @@ It allows an authority to set up a pool (collection) where users can commit toke
 ## Program Functionality
 
 - **Collections:**
-  An authority initializes a collection with a cap on the total tokens that can be deposited, usually based on the circulating amount of the token. Users commit tokens to the collection and receive replacement tokens in return. The collection can be configured to either store the committed tokens in a vault or burn them. User deposits are tracked for future reward distributions.
+  An authority initializes a collection with a cap on the total tokens that can be deposited, usually based on the circulating amount of the token. The authority also adds token distributions (see below) for the collection, adds tokens to them and then finalizes the collection setup. Then users commit tokens to the collection and receive replacement tokens in return as well as their share of tokens from the distributions. The collection stores the committed tokens in a vault which the authority can withdraw.
 
 - **Distributions:**
-  The collection authority can set up a distribution associated with a collection. The distribution holds tokens that are later shared among the users who deposited tokens into the collection.
+  The collection authority can set up a distributions associated with a collection. Each distribution is set up with tokens that are later claimed by users who deposit tokens into the collection.
 
 - **Deposits & Claims:**
-  Users deposit (commit) tokens into the collection to become eligible for rewards. When a distribution is available, users can claim a share of its tokens proportionally based on their deposit relative to the collection’s maximum allowed tokens.
+  Users deposit (commit) tokens into the collection to become eligible its distributions. Users can claim a share of each distribution's tokens proportionally based on their deposit relative to the collection’s maximum allowed tokens.
 
 - **Management:**
-  The collection authority can adjust the maximum deposit cap and withdraw tokens from the collection vault without affecting users’ reward eligibility.
+  The collection authority can withdraw tokens from the collection vault without affecting users’ reward eligibility.
 
 ## Instructions
 
 - **init_collection** - Creates a new token collection with specified maximum deposit limit and burn configuration
-- **decrease_collection_max_collectable_tokens** - Authority reduces the maximum deposit limit for a collection
 - **withdraw_from_collection** - Authority withdraws tokens from collection vault
+- **finalize_collection_setup** - Authority is done populating distributions on a collection
 - **init_distribution** - Creates a new distribution for rewarding collection depositors
 - **add_distribution_tokens** - Adds tokens to a distribution's reward pool
 - **user_commit_to_collection** - User deposits tokens into a collection and receives freshly minted replacement tokens
-- **user_claim_from_distribution** - User claims their share of distribution rewards
+- **user_claim_from_distribution** - User claims their share of distribution tokens
 
 ## Program Accounts
 
@@ -34,6 +34,10 @@ It allows an authority to set up a pool (collection) where users can commit toke
 - **CollectionUserState** - Records how many tokens a user has deposited into a collection
 - **Distribution** - Manages token distribution for a collection including total tokens deposited, mint, vault and amount distributed
 - **DistributionUserState** - Tracks how many tokens a user has received from a distribution
+
+## Build and Test
+
+Initially built with Solana 1.18.26 and Anchor 0.28.0. Use `anchor test` to run the basic tests. 
 
 ## License
 
