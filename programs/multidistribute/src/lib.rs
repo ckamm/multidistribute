@@ -207,13 +207,14 @@ pub mod multidistribute {
             .lifetime_tokens_collected
             .checked_add(amount)
             .ok_or(ErrorCode::Overflow)?;
-        user_state.user = ctx.accounts.user.key();
-        user_state.deposited_amount = amount;
-
         require!(
             collection.lifetime_tokens_collected <= collection.max_collectable_tokens,
             ErrorCode::MaxCollectableTokensExceeded
         );
+
+        user_state.collection = ctx.accounts.collection.key();
+        user_state.user = ctx.accounts.user.key();
+        user_state.deposited_amount = amount;
 
         Ok(())
     }
@@ -543,7 +544,8 @@ pub struct UserClaimFromDistribution<'info> {
 
     /// The user's state for the collection, tracking their deposits
     #[account(
-        has_one = user
+        has_one = user,
+        has_one = collection,
     )]
     pub collection_user_state: Account<'info, CollectionUserState>,
 
@@ -607,6 +609,7 @@ pub struct Collection {
 #[account]
 pub struct CollectionUserState {
     pub user: Pubkey,
+    pub collection: Pubkey,
     pub deposited_amount: u64,
 }
 
