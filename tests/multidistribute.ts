@@ -238,8 +238,8 @@ describe("multidistribute", () => {
       .accounts({
         distribution: distribution1,
         vault: distribution1Vault,
-        authorityTokenAccount: authorityTokenAccount1,
-        authority: authority.publicKey,
+        depositorTokenAccount: authorityTokenAccount1,
+        depositor: authority.publicKey,
         tokenProgram: TOKEN_PROGRAM_ID,
       })
       .rpc();
@@ -265,8 +265,8 @@ describe("multidistribute", () => {
       .accounts({
         distribution: distribution2,
         vault: distribution2Vault,
-        authorityTokenAccount: authorityTokenAccount2,
-        authority: authority.publicKey,
+        depositorTokenAccount: authorityTokenAccount2,
+        depositor: authority.publicKey,
         tokenProgram: TOKEN_PROGRAM_ID,
       })
       .rpc();

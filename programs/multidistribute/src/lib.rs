@@ -122,9 +122,9 @@ pub mod multidistribute {
         let transfer_ctx = CpiContext::new(
             ctx.accounts.token_program.to_account_info(),
             Transfer {
-                from: ctx.accounts.authority_token_account.to_account_info(),
+                from: ctx.accounts.depositor_token_account.to_account_info(),
                 to: ctx.accounts.vault.to_account_info(),
-                authority: ctx.accounts.authority.to_account_info(),
+                authority: ctx.accounts.depositor.to_account_info(),
             },
         );
         token::transfer(transfer_ctx, amount)?;
@@ -240,6 +240,11 @@ pub mod multidistribute {
         for i in (0..remaining.len()).step_by(3) {
             let distribution_info = &remaining[i];
             let distribution_vault_info = &remaining[i + 1];
+
+            // Note: Target token account is not explicitly validated:
+            // The spl_token::transfer CPI verifies the account owner and token
+            // mint, and the token owner can legitimately be different from
+            // user.key().
             let user_dist_token_account_info = &remaining[i + 2];
 
             let distribution_index = i / 3;
@@ -251,6 +256,7 @@ pub mod multidistribute {
             );
 
             // Verify distribution account is owned by this program
+            // (redundant: key was already checked)
             require!(
                 distribution_info.owner == &crate::ID,
                 ErrorCode::InvalidDistributionOwner
@@ -262,6 +268,7 @@ pub mod multidistribute {
                 Distribution::try_deserialize(&mut distribution_data.as_ref())?;
 
             // Verify distribution belongs to this collection
+            // (redundant: key was already checked)
             require!(
                 distribution.collection == collection_key,
                 ErrorCode::DistributionCollectionMismatch
@@ -280,51 +287,51 @@ pub mod multidistribute {
                 .checked_div(max_collectable_tokens as u128)
                 .ok_or(ErrorCode::Overflow)? as u64;
 
-            if user_share > 0 {
-                // Copy out pubkeys needed for seeds
-                let dist_collection = distribution.collection;
-                let dist_mint = distribution.mint;
-                let dist_bump = distribution.bump;
+            // user_share == 0 is valid.
 
-                // Update distribution state
-                distribution.distributed_tokens = distribution
-                    .distributed_tokens
-                    .checked_add(user_share)
-                    .ok_or(ErrorCode::Overflow)?;
+            // Copy out pubkeys needed for seeds
+            let dist_collection = distribution.collection;
+            let dist_mint = distribution.mint;
+            let dist_bump = distribution.bump;
 
-                // Serialize the updated distribution back
-                distribution.try_serialize(&mut distribution_data.as_mut())?;
+            // Update distribution state
+            distribution.distributed_tokens = distribution
+                .distributed_tokens
+                .checked_add(user_share)
+                .ok_or(ErrorCode::Overflow)?;
 
-                // Drop the borrow before the CPI
-                drop(distribution_data);
+            // Serialize the updated distribution back
+            distribution.try_serialize(&mut distribution_data.as_mut())?;
 
-                // Transfer tokens from distribution vault to user using invoke_signed
-                let distribution_seeds: &[&[u8]] = &[
-                    b"distribution",
-                    dist_collection.as_ref(),
-                    dist_mint.as_ref(),
-                    &[dist_bump],
-                ];
+            // Drop the borrow before the CPI
+            drop(distribution_data);
 
-                let transfer_ix = spl_token::instruction::transfer(
-                    &token_program_key,
-                    distribution_vault_info.key,
-                    user_dist_token_account_info.key,
-                    distribution_info.key,
-                    &[],
-                    user_share,
-                )?;
+            // Transfer tokens from distribution vault to user using invoke_signed
+            let distribution_seeds: &[&[u8]] = &[
+                b"distribution",
+                dist_collection.as_ref(),
+                dist_mint.as_ref(),
+                &[dist_bump],
+            ];
 
-                invoke_signed(
-                    &transfer_ix,
-                    &[
-                        distribution_vault_info.clone(),
-                        user_dist_token_account_info.clone(),
-                        distribution_info.clone(),
-                    ],
-                    &[distribution_seeds],
-                )?;
-            }
+            let transfer_ix = spl_token::instruction::transfer(
+                &token_program_key,
+                distribution_vault_info.key,
+                user_dist_token_account_info.key,
+                distribution_info.key,
+                &[],
+                user_share,
+            )?;
+
+            invoke_signed(
+                &transfer_ix,
+                &[
+                    distribution_vault_info.clone(),
+                    user_dist_token_account_info.clone(),
+                    distribution_info.clone(),
+                ],
+                &[distribution_seeds],
+            )?;
         }
 
         Ok(())
@@ -388,9 +395,6 @@ pub struct InitCollection<'info> {
 #[derive(Accounts)]
 pub struct WithdrawFromCollection<'info> {
     /// The collection to withdraw from
-    #[account(
-        has_one = authority
-    )]
     pub collection: Box<Account<'info, Collection>>,
 
     /// The collection's vault, holding the tokens to withdraw
@@ -408,6 +412,9 @@ pub struct WithdrawFromCollection<'info> {
     pub authority_token_account: Account<'info, TokenAccount>,
 
     /// The authority of the collection
+    #[account(
+        address = collection.authority
+    )]
     pub authority: Signer<'info>,
 
     pub token_program: Program<'info, Token>,
@@ -430,10 +437,7 @@ pub struct InitDistribution<'info> {
     pub distribution: Account<'info, Distribution>,
 
     /// The collection this distribution is associated with
-    #[account(
-        mut,
-        has_one = authority
-    )]
+    #[account(mut)]
     pub collection: Box<Account<'info, Collection>>,
 
     /// The SPL token mint for tokens being distributed. Can be the same as or
@@ -450,7 +454,10 @@ pub struct InitDistribution<'info> {
     pub vault: Account<'info, TokenAccount>,
 
     /// The collection's authority and payer for the distribution accounts
-    #[account(mut)]
+    #[account(
+        mut,
+        address = collection.authority
+    )]
     pub authority: Signer<'info>,
 
     pub system_program: Program<'info, System>,
@@ -471,20 +478,21 @@ pub struct AddDistributionTokens<'info> {
     /// The distribution's vault to receive the tokens
     #[account(
         mut,
-        constraint = vault.key() == distribution.vault
+        address = distribution.vault
     )]
     pub vault: Account<'info, TokenAccount>,
 
     /// The token account providing the tokens to distribute
     #[account(
         mut,
-        constraint = authority_token_account.mint == vault.mint
+        token::mint = vault.mint
+        // intentionally not checking the owner: could be delegated
     )]
-    pub authority_token_account: Account<'info, TokenAccount>,
+    pub depositor_token_account: Account<'info, TokenAccount>,
 
     /// The signer who owns the token account providing the tokens
     #[account(mut)]
-    pub authority: Signer<'info>,
+    pub depositor: Signer<'info>,
 
     pub token_program: Program<'info, Token>,
 }
@@ -513,6 +521,7 @@ pub struct UserCommitAndClaimStateless<'info> {
     #[account(
         mut,
         token::mint = mint
+        // intentionally not checking the owner: could be delegated
     )]
     pub user_token_account: Account<'info, TokenAccount>,
 
