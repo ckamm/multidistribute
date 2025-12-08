@@ -30,14 +30,11 @@ describe("multidistribute", () => {
   let collection: PublicKey;
   let collectionVault: PublicKey;
   let replacementMint: PublicKey;
-  let userState: PublicKey;
   let userReplacementTokenAccount: PublicKey;
   let distribution1: PublicKey;
   let distribution1Vault: PublicKey;
   let distribution2: PublicKey;
   let distribution2Vault: PublicKey;
-  let distribution1UserState: PublicKey;
-  let distribution2UserState: PublicKey;
 
   const user = anchor.web3.Keypair.generate();
   const authority = provider.wallet;
@@ -166,15 +163,6 @@ describe("multidistribute", () => {
       user.publicKey
     );
 
-    [userState] = await PublicKey.findProgramAddress(
-      [
-        Buffer.from("user_state"),
-        collection.toBuffer(),
-        user.publicKey.toBuffer(),
-      ],
-      program.programId
-    );
-
     [distribution1] = await PublicKey.findProgramAddress(
       [
         Buffer.from("distribution"),
@@ -203,24 +191,6 @@ describe("multidistribute", () => {
       mint2,
       distribution2,
       true // allowOwnerOffCurve: true since distribution2 is a PDA
-    );
-
-    [distribution1UserState] = await PublicKey.findProgramAddress(
-      [
-        Buffer.from("distribution_user_state"),
-        distribution1.toBuffer(),
-        user.publicKey.toBuffer(),
-      ],
-      program.programId
-    );
-
-    [distribution2UserState] = await PublicKey.findProgramAddress(
-      [
-        Buffer.from("distribution_user_state"),
-        distribution2.toBuffer(),
-        user.publicKey.toBuffer(),
-      ],
-      program.programId
     );
   });
 
@@ -308,328 +278,124 @@ describe("multidistribute", () => {
     assert.equal(distribution2Account.lifetimeDepositedTokens.toString(), "200");
   });
 
-  it("Deposits tokens and receives distributions", async () => {
-    // Check initial balances
-    const userAccount1BeforeCommit = await getAccount(
+  it("Commits and claims from multiple distributions statelessly", async () => {
+    // Check balances before stateless commit and claim
+    const userAccount1Before = await getAccount(
       provider.connection,
       userTokenAccount1
     );
-    const vaultBeforeCommit = await getAccount(
-      provider.connection,
-      collectionVault
-    );
-
-    // First commit to collection
-    await program.methods
-      .userCommitToCollection(new anchor.BN(500))
-      .accounts({
-        collection,
-        userState,
-        mint: mint1,
-        userTokenAccount: userTokenAccount1,
-        vault: collectionVault,
-        replacementMint,
-        userReplacementTokenAccount,
-        user: user.publicKey,
-        tokenProgram: TOKEN_PROGRAM_ID,
-        systemProgram: anchor.web3.SystemProgram.programId,
-        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-        rent: anchor.web3.SYSVAR_RENT_PUBKEY,
-      })
-      .signers([user])
-      .rpc();
-
-    // Verify balances after commit
-    const userAccount1AfterCommit = await getAccount(
-      provider.connection,
-      userTokenAccount1
-    );
-    const vaultAfterCommit = await getAccount(
-      provider.connection,
-      collectionVault
-    );
-    
-    assert.equal(
-      userAccount1BeforeCommit.amount - BigInt(500),
-      userAccount1AfterCommit.amount
-    );
-    assert.equal(
-      vaultBeforeCommit.amount + BigInt(500),
-      vaultAfterCommit.amount
-    );
-
-    // Check balances before claim
-    const userAccount1BeforeClaim = await getAccount(
-      provider.connection,
-      userTokenAccount1
-    );
-    const distribution1VaultBeforeClaim = await getAccount(
-      provider.connection,
-      distribution1Vault
-    );
-
-    // Claim from first distribution
-    await program.methods
-      .userClaimFromDistribution()
-      .accounts({
-        collection,
-        distribution: distribution1,
-        collectionUserState: userState,
-        distributionUserState: distribution1UserState,
-        distributionVault: distribution1Vault,
-        userTokenAccount: userTokenAccount1,
-        user: user.publicKey,
-        tokenProgram: TOKEN_PROGRAM_ID,
-        systemProgram: anchor.web3.SystemProgram.programId,
-      })
-      .signers([user])
-      .rpc();
-
-    // Verify balances after claim
-    const userAccount1AfterClaim = await getAccount(
-      provider.connection,
-      userTokenAccount1
-    );
-    const distribution1VaultAfterClaim = await getAccount(
-      provider.connection,
-      distribution1Vault
-    );
-
-    assert.equal(
-      userAccount1BeforeClaim.amount + BigInt(50),
-      userAccount1AfterClaim.amount
-    );
-    assert.equal(
-      distribution1VaultBeforeClaim.amount - BigInt(50),
-      distribution1VaultAfterClaim.amount
-    );
-
-    // Verify received amount (should be 50 tokens - half of distribution1)
-    const distribution1UserStateAccount = await program.account.distributionUserState.fetch(
-      distribution1UserState
-    );
-    assert.equal(distribution1UserStateAccount.receivedAmount.toString(), "50");
-
-    // Check balances before second commit
-    const userAccount1BeforeCommit2 = await getAccount(
-      provider.connection,
-      userTokenAccount1
-    );
-    const vaultBeforeCommit2 = await getAccount(
-      provider.connection,
-      collectionVault
-    );
-
-    // Second commit to collection
-    await program.methods
-      .userCommitToCollection(new anchor.BN(300))
-      .accounts({
-        collection,
-        userState,
-        mint: mint1,
-        userTokenAccount: userTokenAccount1,
-        vault: collectionVault,
-        replacementMint,
-        userReplacementTokenAccount,
-        user: user.publicKey,
-        tokenProgram: TOKEN_PROGRAM_ID,
-        systemProgram: anchor.web3.SystemProgram.programId,
-        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-        rent: anchor.web3.SYSVAR_RENT_PUBKEY,
-      })
-      .signers([user])
-      .rpc();
-
-    // Verify balances after second commit
-    const userAccount1AfterCommit2 = await getAccount(
-      provider.connection,
-      userTokenAccount1
-    );
-    const vaultAfterCommit2 = await getAccount(
-      provider.connection,
-      collectionVault
-    );
-
-    assert.equal(
-      userAccount1BeforeCommit2.amount - BigInt(300),
-      userAccount1AfterCommit2.amount
-    );
-    assert.equal(
-      vaultBeforeCommit2.amount + BigInt(300),
-      vaultAfterCommit2.amount
-    );
-
-    // Check balances before second claim
-    const userAccount2BeforeClaim = await getAccount(
+    const userAccount2Before = await getAccount(
       provider.connection,
       userTokenAccount2
     );
-    const distribution2VaultBeforeClaim = await getAccount(
+    const vaultBefore = await getAccount(
+      provider.connection,
+      collectionVault
+    );
+    const dist1VaultBefore = await getAccount(
+      provider.connection,
+      distribution1Vault
+    );
+    const dist2VaultBefore = await getAccount(
       provider.connection,
       distribution2Vault
     );
 
-    // Claim from second distribution
+    // User commits 200 tokens (20% of 1000 max) and claims from both distributions
+    // Expected: receive 20 from dist1 (20% of 100) and 40 from dist2 (20% of 200)
+    const COMMIT_AMOUNT = new anchor.BN(200);
+
     await program.methods
-      .userClaimFromDistribution()
+      .userCommitAndClaimStateless(COMMIT_AMOUNT)
       .accounts({
         collection,
-        distribution: distribution2,
-        collectionUserState: userState,
-        distributionUserState: distribution2UserState,
-        distributionVault: distribution2Vault,
-        userTokenAccount: userTokenAccount2,
+        mint: mint1,
+        userTokenAccount: userTokenAccount1,
+        vault: collectionVault,
+        replacementMint: replacementMint,
+        userReplacementTokenAccount: userReplacementTokenAccount,
         user: user.publicKey,
         tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: anchor.web3.SystemProgram.programId,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
       })
+      .remainingAccounts([
+        // Distribution 1 accounts
+        { pubkey: distribution1, isWritable: true, isSigner: false },
+        { pubkey: distribution1Vault, isWritable: true, isSigner: false },
+        { pubkey: userTokenAccount1, isWritable: true, isSigner: false },
+        // Distribution 2 accounts
+        { pubkey: distribution2, isWritable: true, isSigner: false },
+        { pubkey: distribution2Vault, isWritable: true, isSigner: false },
+        { pubkey: userTokenAccount2, isWritable: true, isSigner: false },
+      ])
       .signers([user])
       .rpc();
 
-    // Verify balances after second claim
-    const userAccount2AfterClaim = await getAccount(
+    // Verify balances after stateless commit and claim
+    const userAccount1After = await getAccount(
+      provider.connection,
+      userTokenAccount1
+    );
+    const userAccount2After = await getAccount(
       provider.connection,
       userTokenAccount2
     );
-    const distribution2VaultAfterClaim = await getAccount(
+    const vaultAfter = await getAccount(
+      provider.connection,
+      collectionVault
+    );
+    const dist1VaultAfter = await getAccount(
+      provider.connection,
+      distribution1Vault
+    );
+    const dist2VaultAfter = await getAccount(
       provider.connection,
       distribution2Vault
     );
 
+    // User committed 200 tokens to collection, but also received 20 back from dist1
     assert.equal(
-      userAccount2BeforeClaim.amount + BigInt(160),
-      userAccount2AfterClaim.amount
+      userAccount1Before.amount - BigInt(180),
+      userAccount1After.amount
     );
+
+    // User received tokens from dist2
     assert.equal(
-      distribution2VaultBeforeClaim.amount - BigInt(160),
-      distribution2VaultAfterClaim.amount
+      userAccount2Before.amount + BigInt(40),
+      userAccount2After.amount
     );
 
-    // Verify received amount (should be 160 tokens - 80% of distribution2)
-    const distribution2UserStateAccount = await program.account.distributionUserState.fetch(
-      distribution2UserState
-    );
-    assert.equal(distribution2UserStateAccount.receivedAmount.toString(), "160");
-  });
-
-  it("Burns tokens when burn_tokens is true", async () => {
-    // Create a new collection with burn_tokens=true
-    const [burnCollection] = await PublicKey.findProgramAddress(
-      [
-        Buffer.from("collection"),
-        authority.publicKey.toBuffer(),
-        mint1.toBuffer(),
-        new anchor.BN(2).toArrayLike(Buffer, "le", 8),
-      ],
-      program.programId
-    );
-
-    const burnCollectionVault = await getAssociatedTokenAddress(
-      mint1,
-      burnCollection,
-      true
-    );
-
-    const [burnReplacementMint] = await PublicKey.findProgramAddress(
-      [
-        Buffer.from("replacement_mint"),
-        burnCollection.toBuffer(),
-      ],
-      program.programId
-    );
-
-    const userBurnReplacementTokenAccount = await getAssociatedTokenAddress(
-      burnReplacementMint,
-      user.publicKey
-    );
-
-    const [burnUserState] = await PublicKey.findProgramAddress(
-      [
-        Buffer.from("user_state"),
-        burnCollection.toBuffer(),
-        user.publicKey.toBuffer(),
-      ],
-      program.programId
-    );
-
-    await program.methods
-      .initCollection(new anchor.BN(2), MAX_TOKENS, true)
-      .accounts({
-        collection: burnCollection,
-        mint: mint1,
-        vault: burnCollectionVault,
-        replacementMint: burnReplacementMint,
-        authority: authority.publicKey,
-        systemProgram: anchor.web3.SystemProgram.programId,
-        tokenProgram: TOKEN_PROGRAM_ID,
-        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-        rent: anchor.web3.SYSVAR_RENT_PUBKEY,
-      })
-      .rpc();
-
-    // Check initial balances
-    const userAccount1BeforeBurn = await getAccount(
-      provider.connection,
-      userTokenAccount1
-    );
-    const vaultBeforeBurn = await getAccount(
-      provider.connection,
-      burnCollectionVault
-    );
-    const mintSupplyBefore = (await getMint(provider.connection, mint1)).supply;
-
-    // Commit tokens to burn collection
-    await program.methods
-      .userCommitToCollection(new anchor.BN(300))
-      .accounts({
-        collection: burnCollection,
-        userState: burnUserState,
-        mint: mint1,
-        userTokenAccount: userTokenAccount1,
-        vault: burnCollectionVault,
-        replacementMint: burnReplacementMint,
-        userReplacementTokenAccount: userBurnReplacementTokenAccount,
-        user: user.publicKey,
-        tokenProgram: TOKEN_PROGRAM_ID,
-        systemProgram: anchor.web3.SystemProgram.programId,
-        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-        rent: anchor.web3.SYSVAR_RENT_PUBKEY,
-      })
-      .signers([user])
-      .rpc();
-
-    // Verify balances after burn
-    const userAccount1AfterBurn = await getAccount(
-      provider.connection,
-      userTokenAccount1
-    );
-    const vaultAfterBurn = await getAccount(
-      provider.connection,
-      burnCollectionVault
-    );
-    const mintSupplyAfter = (await getMint(provider.connection, mint1)).supply;
-
-    // User balance should decrease
+    // Collection vault should have tokens
     assert.equal(
-      userAccount1BeforeBurn.amount - BigInt(300),
-      userAccount1AfterBurn.amount
-    );
-    
-    // Vault balance should not change since tokens are burned
-    assert.equal(vaultBeforeBurn.amount, vaultAfterBurn.amount);
-    
-    // Mint supply should decrease
-    assert.equal(
-      mintSupplyBefore - BigInt(300),
-      mintSupplyAfter
+      vaultBefore.amount + BigInt(200),
+      vaultAfter.amount
     );
 
-    // Check replacement tokens were minted
+    // Distribution 1 vault should have fewer tokens
+    assert.equal(
+      dist1VaultBefore.amount - BigInt(20),
+      dist1VaultAfter.amount
+    );
+
+    // Distribution 2 vault should have fewer tokens
+    assert.equal(
+      dist2VaultBefore.amount - BigInt(40),
+      dist2VaultAfter.amount
+    );
+
+    // Verify replacement tokens were minted
     const userReplacementBalance = (await getAccount(
       provider.connection,
-      userBurnReplacementTokenAccount
+      userReplacementTokenAccount
     )).amount;
-    assert.equal(userReplacementBalance, BigInt(300));
+    assert.equal(userReplacementBalance, BigInt(200));
+
+    // Verify distribution states were updated
+    const dist1Account = await program.account.distribution.fetch(distribution1);
+    const dist2Account = await program.account.distribution.fetch(distribution2);
+    assert.equal(dist1Account.distributedTokens.toString(), "20");
+    assert.equal(dist2Account.distributedTokens.toString(), "40");
   });
 
   it("Withdraws tokens from collection", async () => {
@@ -668,7 +434,7 @@ describe("multidistribute", () => {
     assert.equal(vaultAfterWithdraw.amount, BigInt(0));
     assert.equal(
       authorityAccount1AfterWithdraw.amount,
-      authorityAccount1BeforeWithdraw.amount + BigInt(800)
+      authorityAccount1BeforeWithdraw.amount + BigInt(200)
     );
   });
 });

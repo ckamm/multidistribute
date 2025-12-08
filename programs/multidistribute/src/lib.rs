@@ -1,5 +1,7 @@
 use anchor_lang::prelude::*;
+use anchor_lang::solana_program::program::invoke_signed;
 use anchor_spl::associated_token::AssociatedToken;
+use anchor_spl::token::spl_token;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 use std::mem::size_of;
 
@@ -30,7 +32,6 @@ pub mod multidistribute {
             ErrorCode::InvalidMaxCollectableTokens
         );
 
-
         let collection = &mut ctx.accounts.collection;
         collection.authority = ctx.accounts.authority.key();
         collection.lifetime_tokens_collected = 0;
@@ -41,40 +42,14 @@ pub mod multidistribute {
         collection.bump = *ctx.bumps.get("collection").unwrap();
         collection.counter = counter;
         collection.burn_tokens = burn_tokens;
-        Ok(())
-    }
-
-    /// Decreases the maximum number of tokens that can be collected by this collection.
-    ///
-    /// This can be useful if the collection won't reach its initial maximum, allowing
-    /// distributions to be fully utilized. Can only be called by the collection authority.
-    ///
-    /// # Arguments
-    /// * `new_max_collectable_tokens` - New maximum value, must be less than current maximum
-    ///   and greater than or equal to currently collected amount
-    pub fn decrease_collection_max_collectable_tokens(
-        ctx: Context<DecreaseCollectionMaxTokens>,
-        new_max_collectable_tokens: u64,
-    ) -> Result<()> {
-        let collection = &mut ctx.accounts.collection;
-
-        require!(
-            new_max_collectable_tokens >= collection.lifetime_tokens_collected,
-            ErrorCode::MaxCollectableTokensBelowTotal
-        );
-        require!(
-            new_max_collectable_tokens < collection.max_collectable_tokens,
-            ErrorCode::InvalidDecrease
-        );
-
-        collection.max_collectable_tokens = new_max_collectable_tokens;
+        collection.num_distributions = 0;
+        collection.distributions = [Pubkey::default(); MAX_DISTRIBUTIONS];
         Ok(())
     }
 
     /// Withdraws all tokens from the collection vault to the authority's token account.
     ///
-    /// Can only be called by the collection authority. This does not affect users'
-    /// deposited amounts or their ability to receive from distributions.
+    /// Can only be called by the collection authority.
     pub fn withdraw_from_collection(ctx: Context<WithdrawFromCollection>) -> Result<()> {
         let collection = &ctx.accounts.collection;
 
@@ -109,13 +84,27 @@ pub mod multidistribute {
     /// The distributed token type can be different from the collected token type.
     /// Can only be called by the collection authority.
     pub fn init_distribution(ctx: Context<InitDistribution>) -> Result<()> {
+        let collection = &mut ctx.accounts.collection;
+
+        // Check we haven't exceeded max distributions
+        require!(
+            (collection.num_distributions as usize) < MAX_DISTRIBUTIONS,
+            ErrorCode::MaxDistributionsExceeded
+        );
+
         let distribution = &mut ctx.accounts.distribution;
-        distribution.collection = ctx.accounts.collection.key();
+        distribution.collection = collection.key();
         distribution.lifetime_deposited_tokens = 0;
         distribution.mint = ctx.accounts.mint.key();
         distribution.vault = ctx.accounts.vault.key();
         distribution.distributed_tokens = 0;
         distribution.bump = *ctx.bumps.get("distribution").unwrap();
+
+        // Register the distribution in the collection
+        let idx = collection.num_distributions as usize;
+        collection.distributions[idx] = distribution.key();
+        collection.num_distributions += 1;
+
         Ok(())
     }
 
@@ -148,18 +137,24 @@ pub mod multidistribute {
         Ok(())
     }
 
-    /// Commits tokens to a collection's vault.
+    /// Commits tokens and immediately claims from multiple distributions in a single transaction.
     ///
-    /// Users commit tokens to become eligible for distributions. Their share of
-    /// future distributions will be proportional to their committed amount relative
-    /// to the collection's max_collectable_tokens. Users receive freshly minted
-    /// replacement tokens equal to their committed amount.
+    /// This instruction combines committing tokens to a collection with claiming from
+    /// multiple distributions, leaving no on-chain state.
     ///
     /// # Arguments
     /// * `amount` - Number of tokens to commit to the collection
-    pub fn user_commit_to_collection(ctx: Context<UserCommitToCollection>, amount: u64) -> Result<()> {
+    ///
+    /// # Remaining Accounts
+    /// For each distribution to claim from, provide 3 accounts in order:
+    /// - Distribution account (the Distribution PDA)
+    /// - Distribution vault (the token account holding distribution tokens)
+    /// - User's token account for this distribution's mint (to receive claimed tokens)
+    pub fn user_commit_and_claim_stateless(
+        ctx: Context<UserCommitAndClaimStateless>,
+        amount: u64,
+    ) -> Result<()> {
         let collection = &ctx.accounts.collection;
-        let user_state = &mut ctx.accounts.user_state;
 
         // Either burn or transfer the tokens
         if collection.burn_tokens {
@@ -186,34 +181,33 @@ pub mod multidistribute {
 
         // Mint replacement tokens to user
         let counter_bytes = collection.counter.to_le_bytes();
-        let seeds = &[
+        let collection_seeds = &[
             b"collection",
             collection.authority.as_ref(),
             collection.mint.as_ref(),
             &counter_bytes,
             &[collection.bump],
         ];
-        let signer = &[&seeds[..]];
+        let collection_signer = &[&collection_seeds[..]];
 
         let mint_ctx = CpiContext::new_with_signer(
             ctx.accounts.token_program.to_account_info(),
             token::MintTo {
                 mint: ctx.accounts.replacement_mint.to_account_info(),
-                to: ctx.accounts.user_replacement_token_account.to_account_info(),
+                to: ctx
+                    .accounts
+                    .user_replacement_token_account
+                    .to_account_info(),
                 authority: ctx.accounts.collection.to_account_info(),
             },
-            signer,
+            collection_signer,
         );
         token::mint_to(mint_ctx, amount)?;
 
-        // Update states
+        // Update collection state
         let collection = &mut ctx.accounts.collection;
         collection.lifetime_tokens_collected = collection
             .lifetime_tokens_collected
-            .checked_add(amount)
-            .ok_or(ErrorCode::Overflow)?;
-        user_state.deposited_amount = user_state
-            .deposited_amount
             .checked_add(amount)
             .ok_or(ErrorCode::Overflow)?;
 
@@ -222,68 +216,116 @@ pub mod multidistribute {
             ErrorCode::MaxCollectableTokensExceeded
         );
 
-        Ok(())
-    }
-
-    /// Claims a user's share of tokens from a distribution.
-    ///
-    /// The amount claimed is proportional to the user's deposit in the collection
-    /// relative to the collection's max_collectable_tokens. Can be called multiple
-    /// times as more tokens are added to the distribution.
-    pub fn user_claim_from_distribution(ctx: Context<UserClaimFromDistribution>) -> Result<()> {
-        let collection = &ctx.accounts.collection;
-        let distribution = &ctx.accounts.distribution;
-        let collection_user_state = &ctx.accounts.collection_user_state;
-        let distribution_user_state = &mut ctx.accounts.distribution_user_state;
-
-        // Calculate user's share:
-        // Since user_claim_from_distribution() can be called at any time, in particular before all
-        // users have deposited, the fixed max_collectable_tokens denominator is used.
-        // That means that if less than max_collectable_tokens end up deposited, a large
-        // part of the distribution may not be handed out.
-        // If this becomes a problem, the authority may decrease max_collectable_tokens by
-        // calling decrease_collection_max_collectable_tokens.
-        let user_share = (collection_user_state.deposited_amount as u128)
-            .checked_mul(distribution.lifetime_deposited_tokens as u128)
-            .ok_or(ErrorCode::Overflow)?
-            // Integer division rounds down, ensuring we never overpay users
-            .checked_div(collection.max_collectable_tokens as u128)
-            .ok_or(ErrorCode::Overflow)? as u64;
-
-        let amount_to_receive = user_share
-            .checked_sub(distribution_user_state.received_amount)
-            .ok_or(ErrorCode::Overflow)?;
-
-        // Note that amount_to_receive may be zero. That is ok, the instruction
-        // should nevertheless succeed.
-
-        // Transfer tokens from distribution vault to user
-        let authority_seeds = &[
-            b"distribution",
-            distribution.collection.as_ref(),
-            distribution.mint.as_ref(),
-            &[distribution.bump],
-        ];
-        let signer = &[&authority_seeds[..]];
-
-        let transfer_ctx = CpiContext::new_with_signer(
-            ctx.accounts.token_program.to_account_info(),
-            Transfer {
-                from: ctx.accounts.distribution_vault.to_account_info(),
-                to: ctx.accounts.user_token_account.to_account_info(),
-                authority: ctx.accounts.distribution.to_account_info(),
-            },
-            signer,
+        // Process distributions from remaining accounts
+        // Each distribution requires 3 accounts: distribution, distribution_vault, user_token_account
+        let remaining = ctx.remaining_accounts;
+        require!(
+            remaining.len() % 3 == 0,
+            ErrorCode::InvalidRemainingAccounts
         );
-        token::transfer(transfer_ctx, amount_to_receive)?;
 
-        // Update states
-        let distribution = &mut ctx.accounts.distribution;
-        distribution_user_state.received_amount = user_share;
-        distribution.distributed_tokens = distribution
-            .distributed_tokens
-            .checked_add(amount_to_receive)
-            .ok_or(ErrorCode::Overflow)?;
+        let num_distributions = collection.num_distributions as usize;
+        let registered_distributions = &collection.distributions[..num_distributions];
+
+        // Verify the correct number of distributions are provided
+        require!(
+            remaining.len() / 3 == num_distributions,
+            ErrorCode::DistributionsMismatch
+        );
+
+        let max_collectable_tokens = collection.max_collectable_tokens;
+        let collection_key = collection.key();
+        let token_program_key = ctx.accounts.token_program.key();
+
+        for i in (0..remaining.len()).step_by(3) {
+            let distribution_info = &remaining[i];
+            let distribution_vault_info = &remaining[i + 1];
+            let user_dist_token_account_info = &remaining[i + 2];
+
+            let distribution_index = i / 3;
+
+            // Verify the distribution matches the registered one at this index
+            require!(
+                distribution_info.key() == registered_distributions[distribution_index],
+                ErrorCode::DistributionsMismatch
+            );
+
+            // Verify distribution account is owned by this program
+            require!(
+                distribution_info.owner == &crate::ID,
+                ErrorCode::InvalidDistributionOwner
+            );
+
+            // Deserialize and validate distribution
+            let mut distribution_data = distribution_info.try_borrow_mut_data()?;
+            let mut distribution: Distribution =
+                Distribution::try_deserialize(&mut distribution_data.as_ref())?;
+
+            // Verify distribution belongs to this collection
+            require!(
+                distribution.collection == collection_key,
+                ErrorCode::DistributionCollectionMismatch
+            );
+
+            // Verify vault matches
+            require!(
+                distribution.vault == distribution_vault_info.key(),
+                ErrorCode::InvalidDistributionVault
+            );
+
+            // Calculate user's share
+            let user_share = (amount as u128)
+                .checked_mul(distribution.lifetime_deposited_tokens as u128)
+                .ok_or(ErrorCode::Overflow)?
+                .checked_div(max_collectable_tokens as u128)
+                .ok_or(ErrorCode::Overflow)? as u64;
+
+            if user_share > 0 {
+                // Copy out pubkeys needed for seeds
+                let dist_collection = distribution.collection;
+                let dist_mint = distribution.mint;
+                let dist_bump = distribution.bump;
+
+                // Update distribution state
+                distribution.distributed_tokens = distribution
+                    .distributed_tokens
+                    .checked_add(user_share)
+                    .ok_or(ErrorCode::Overflow)?;
+
+                // Serialize the updated distribution back
+                distribution.try_serialize(&mut distribution_data.as_mut())?;
+
+                // Drop the borrow before the CPI
+                drop(distribution_data);
+
+                // Transfer tokens from distribution vault to user using invoke_signed
+                let distribution_seeds: &[&[u8]] = &[
+                    b"distribution",
+                    dist_collection.as_ref(),
+                    dist_mint.as_ref(),
+                    &[dist_bump],
+                ];
+
+                let transfer_ix = spl_token::instruction::transfer(
+                    &token_program_key,
+                    distribution_vault_info.key,
+                    user_dist_token_account_info.key,
+                    distribution_info.key,
+                    &[],
+                    user_share,
+                )?;
+
+                invoke_signed(
+                    &transfer_ix,
+                    &[
+                        distribution_vault_info.clone(),
+                        user_dist_token_account_info.clone(),
+                        distribution_info.clone(),
+                    ],
+                    &[distribution_seeds],
+                )?;
+            }
+        }
 
         Ok(())
     }
@@ -305,7 +347,7 @@ pub struct InitCollection<'info> {
         ],
         bump
     )]
-    pub collection: Account<'info, Collection>,
+    pub collection: Box<Account<'info, Collection>>,
 
     /// The SPL token mint for tokens being collected
     pub mint: Account<'info, Mint>,
@@ -344,25 +386,12 @@ pub struct InitCollection<'info> {
 }
 
 #[derive(Accounts)]
-pub struct DecreaseCollectionMaxTokens<'info> {
-    /// The collection whose max tokens will be decreased
-    #[account(
-        mut,
-        constraint = collection.authority == authority.key()
-    )]
-    pub collection: Account<'info, Collection>,
-
-    /// The authority of the collection
-    pub authority: Signer<'info>,
-}
-
-#[derive(Accounts)]
 pub struct WithdrawFromCollection<'info> {
     /// The collection to withdraw from
     #[account(
         has_one = authority
     )]
-    pub collection: Account<'info, Collection>,
+    pub collection: Box<Account<'info, Collection>>,
 
     /// The collection's vault, holding the tokens to withdraw
     #[account(
@@ -402,9 +431,10 @@ pub struct InitDistribution<'info> {
 
     /// The collection this distribution is associated with
     #[account(
+        mut,
         has_one = authority
     )]
-    pub collection: Account<'info, Collection>,
+    pub collection: Box<Account<'info, Collection>>,
 
     /// The SPL token mint for tokens being distributed. Can be the same as or
     /// different from the collection's mint.
@@ -459,25 +489,18 @@ pub struct AddDistributionTokens<'info> {
     pub token_program: Program<'info, Token>,
 }
 
+/// Commits tokens to a collection and claims from multiple distributions atomically,
+/// without creating any on-chain user state.
+///
+/// Remaining accounts should be provided in groups of 3 for each distribution:
+/// - Distribution account (writable)
+/// - Distribution vault (writable)
+/// - User's token account for the distribution mint (writable)
 #[derive(Accounts)]
-pub struct UserCommitToCollection<'info> {
+pub struct UserCommitAndClaimStateless<'info> {
     /// The collection to commit tokens to
     #[account(mut)]
-    pub collection: Account<'info, Collection>,
-
-    /// PDA tracking this user's deposits to this collection
-    #[account(
-        init_if_needed,
-        payer = user,
-        space = 8 + size_of::<CollectionUserState>(),
-        seeds = [
-            b"user_state",
-            collection.key().as_ref(),
-            user.key().as_ref()
-        ],
-        bump
-    )]
-    pub user_state: Account<'info, CollectionUserState>,
+    pub collection: Box<Account<'info, Collection>>,
 
     /// The SPL token mint for tokens being collected
     #[account(
@@ -516,75 +539,17 @@ pub struct UserCommitToCollection<'info> {
     )]
     pub user_replacement_token_account: Account<'info, TokenAccount>,
 
-    /// The user depositing tokens, potentially paying for the user_state account
+    /// The user committing tokens
     #[account(mut)]
     pub user: Signer<'info>,
 
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
     pub associated_token_program: Program<'info, AssociatedToken>,
-    pub rent: Sysvar<'info, Rent>,
 }
 
-#[derive(Accounts)]
-pub struct UserClaimFromDistribution<'info> {
-    /// The collection associated with this distribution
-    pub collection: Account<'info, Collection>,
-
-    /// The distribution to claim tokens from
-    #[account(
-        mut,
-        has_one = collection
-    )]
-    pub distribution: Account<'info, Distribution>,
-
-    /// The user's state for the collection, tracking their deposits
-    #[account(
-        seeds = [
-            b"user_state",
-            collection.key().as_ref(),
-            user.key().as_ref()
-        ],
-        bump
-    )]
-    pub collection_user_state: Account<'info, CollectionUserState>,
-
-    /// PDA tracking how many tokens this user has claimed from this distribution
-    #[account(
-        init_if_needed,
-        payer = user,
-        space = 8 + size_of::<DistributionUserState>(),
-        seeds = [
-            b"distribution_user_state",
-            distribution.key().as_ref(),
-            user.key().as_ref()
-        ],
-        bump
-    )]
-    pub distribution_user_state: Account<'info, DistributionUserState>,
-
-    /// The vault holding the tokens to be distributed
-    #[account(
-        mut,
-        address = distribution.vault
-    )]
-    pub distribution_vault: Account<'info, TokenAccount>,
-
-    /// The user's associated token account to receive the claimed tokens
-    #[account(
-        mut,
-        associated_token::mint = distribution.mint,
-        associated_token::authority = user
-    )]
-    pub user_token_account: Account<'info, TokenAccount>,
-
-    /// The user claiming tokens from the distribution
-    #[account(mut)]
-    pub user: Signer<'info>,
-
-    pub token_program: Program<'info, Token>,
-    pub system_program: Program<'info, System>,
-}
+/// Maximum number of distributions that can be registered to a collection
+pub const MAX_DISTRIBUTIONS: usize = 20;
 
 /// Tracks configuration and state for token collection.
 /// Holds deposited tokens and manages distribution eligibility.
@@ -602,13 +567,10 @@ pub struct Collection {
     pub counter: u64,
     /// whether to burn input tokens instead of collecting them
     pub burn_tokens: bool,
-}
-
-/// Tracks an individual user's deposits into a collection.
-/// Used to calculate their share of distributions.
-#[account]
-pub struct CollectionUserState {
-    pub deposited_amount: u64,
+    /// number of registered distributions
+    pub num_distributions: u8,
+    /// registered distribution pubkeys (up to MAX_DISTRIBUTIONS)
+    pub distributions: [Pubkey; MAX_DISTRIBUTIONS],
 }
 
 /// Manages token distribution to collection participants.
@@ -625,13 +587,6 @@ pub struct Distribution {
     pub bump: u8,
 }
 
-/// Tracks how many tokens a user has received from a specific distribution.
-/// Prevents double-claiming and enables partial claims as more tokens are added.
-#[account]
-pub struct DistributionUserState {
-    pub received_amount: u64,
-}
-
 #[error_code]
 pub enum ErrorCode {
     #[msg("Arithmetic overflow in calculation")]
@@ -640,12 +595,24 @@ pub enum ErrorCode {
     #[msg("Tokens for the collection exceed configured maximum")]
     MaxCollectableTokensExceeded,
 
-    #[msg("New maximum tokens must be greater than or equal to total tokens")]
-    MaxCollectableTokensBelowTotal,
-
     #[msg("Maximum collectable tokens must be greater than zero")]
     InvalidMaxCollectableTokens,
 
-    #[msg("New maximum tokens must be less than current maximum")]
-    InvalidDecrease,
+    #[msg("Remaining accounts must be provided in groups of 3 (distribution, vault, user_token_account)")]
+    InvalidRemainingAccounts,
+
+    #[msg("Distribution does not belong to the specified collection")]
+    DistributionCollectionMismatch,
+
+    #[msg("Distribution vault does not match distribution account")]
+    InvalidDistributionVault,
+
+    #[msg("Distribution account has invalid owner")]
+    InvalidDistributionOwner,
+
+    #[msg("Maximum number of distributions exceeded")]
+    MaxDistributionsExceeded,
+
+    #[msg("Must provide all registered distributions in the correct order")]
+    DistributionsMismatch,
 }
