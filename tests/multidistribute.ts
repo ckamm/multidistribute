@@ -133,6 +133,16 @@ describe("multidistribute", () => {
       10000
     );
 
+    // Create replacement mint (pre-created, not a PDA)
+    // Must have: decimals matching mint1, authority as mint_authority, no freeze_authority
+    replacementMint = await createMint(
+      provider.connection,
+      authority.payer,
+      authority.publicKey, // mintAuthority - will be transferred to collection PDA
+      null, // freezeAuthority - must be null
+      6 // decimals - must match mint1
+    );
+
     // Derive PDAs
     [collection] = await PublicKey.findProgramAddress(
       [
@@ -148,14 +158,6 @@ describe("multidistribute", () => {
       mint1,
       collection,
       true // allowOwnerOffCurve: true since collection is a PDA
-    );
-
-    [replacementMint] = await PublicKey.findProgramAddress(
-      [
-        Buffer.from("replacement_mint"),
-        collection.toBuffer(),
-      ],
-      program.programId
     );
 
     userReplacementTokenAccount = await getAssociatedTokenAddress(

@@ -32,6 +32,20 @@ pub mod multidistribute {
             ErrorCode::InvalidMaxCollectableTokens
         );
 
+        // Transfer mint authority from the authority signer to the collection PDA
+        let set_authority_ctx = CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            token::SetAuthority {
+                current_authority: ctx.accounts.authority.to_account_info(),
+                account_or_mint: ctx.accounts.replacement_mint.to_account_info(),
+            },
+        );
+        token::set_authority(
+            set_authority_ctx,
+            token::spl_token::instruction::AuthorityType::MintTokens,
+            Some(ctx.accounts.collection.key()),
+        )?;
+
         let collection = &mut ctx.accounts.collection;
         collection.authority = ctx.accounts.authority.key();
         collection.lifetime_tokens_collected = 0;
@@ -368,17 +382,16 @@ pub struct InitCollection<'info> {
     )]
     pub vault: Account<'info, TokenAccount>,
 
-    /// The replacement mint owned by the collection
+    /// Pre-created replacement mint.
+    ///
+    /// Mint authority will be taken over, metadata must have been
+    /// initialized in advance.
     #[account(
-        init,
-        payer = authority,
-        mint::decimals = mint.decimals,
-        mint::authority = collection,
-        seeds = [
-            b"replacement_mint",
-            collection.key().as_ref()
-        ],
-        bump
+        mut,
+        constraint = replacement_mint.supply == 0 @ ErrorCode::ReplacementMintHasSupply,
+        constraint = replacement_mint.mint_authority.contains(&authority.key()) @ ErrorCode::ReplacementMintAuthorityMismatch,
+        constraint = replacement_mint.freeze_authority.is_none() @ ErrorCode::ReplacementMintHasFreezeAuthority,
+        constraint = replacement_mint.decimals == mint.decimals @ ErrorCode::ReplacementMintDecimalsMismatch,
     )]
     pub replacement_mint: Account<'info, Mint>,
 
@@ -624,4 +637,16 @@ pub enum ErrorCode {
 
     #[msg("Must provide all registered distributions in the correct order")]
     DistributionsMismatch,
+
+    #[msg("Replacement mint must have zero supply")]
+    ReplacementMintHasSupply,
+
+    #[msg("Replacement mint authority must be the collection authority")]
+    ReplacementMintAuthorityMismatch,
+
+    #[msg("Replacement mint must have freeze authority disabled")]
+    ReplacementMintHasFreezeAuthority,
+
+    #[msg("Replacement mint decimals must match the collected mint")]
+    ReplacementMintDecimalsMismatch,
 }
