@@ -15,18 +15,17 @@ pub mod multidistribute {
     ///
     /// A collection allows users to deposit tokens and receive proportional rewards
     /// from multiple distributions. The collection tracks the total tokens deposited
-    /// and enforces a maximum cap.
+    /// and enforces a maximum cap based on the mint's current supply.
     ///
     /// # Arguments
     /// * `counter` - Unique counter value to allow multiple collections for the same mint
-    /// * `max_collectable_tokens` - Maximum number of tokens that can be deposited into this collection
     /// * `burn_tokens` - If true, committed tokens will be burned instead of stored in the vault
     pub fn init_collection(
         ctx: Context<InitCollection>,
         counter: u64,
-        max_collectable_tokens: u64,
         burn_tokens: bool,
     ) -> Result<()> {
+        let max_collectable_tokens = ctx.accounts.mint.supply;
         require!(
             max_collectable_tokens > 0,
             ErrorCode::InvalidMaxCollectableTokens

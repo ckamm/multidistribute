@@ -38,7 +38,6 @@ describe("multidistribute", () => {
 
   const user = anchor.web3.Keypair.generate();
   const authority = provider.wallet;
-  const MAX_TOKENS = new anchor.BN(1000);
   const COUNTER = new anchor.BN(1);
 
   before(async () => {
@@ -198,7 +197,7 @@ describe("multidistribute", () => {
 
   it("Creates a collection", async () => {
     await program.methods
-      .initCollection(COUNTER, MAX_TOKENS, false)
+      .initCollection(COUNTER, false)
       .accounts({
         collection,
         mint: mint1,
@@ -215,7 +214,8 @@ describe("multidistribute", () => {
     const collectionAccount = await program.account.collection.fetch(collection);
     assert.equal(collectionAccount.authority.toString(), authority.publicKey.toString());
     assert.equal(collectionAccount.lifetimeTokensCollected.toString(), "0");
-    assert.equal(collectionAccount.maxCollectableTokens.toString(), MAX_TOKENS.toString());
+    // maxCollectableTokens is now set from mint supply (10000 + 10000 = 20000)
+    assert.equal(collectionAccount.maxCollectableTokens.toString(), "20000");
   });
 
   it("Creates distributions", async () => {
@@ -303,8 +303,8 @@ describe("multidistribute", () => {
       distribution2Vault
     );
 
-    // User commits 200 tokens (20% of 1000 max) and claims from both distributions
-    // Expected: receive 20 from dist1 (20% of 100) and 40 from dist2 (20% of 200)
+    // User commits 200 tokens (1% of 20000 max) and claims from both distributions
+    // Expected: receive 1 from dist1 (1% of 100) and 2 from dist2 (1% of 200)
     const COMMIT_AMOUNT = new anchor.BN(200);
 
     await program.methods
@@ -356,15 +356,15 @@ describe("multidistribute", () => {
       distribution2Vault
     );
 
-    // User committed 200 tokens to collection, but also received 20 back from dist1
+    // User committed 200 tokens to collection, but also received 1 back from dist1
     assert.equal(
-      userAccount1Before.amount - BigInt(180),
+      userAccount1Before.amount - BigInt(199),
       userAccount1After.amount
     );
 
     // User received tokens from dist2
     assert.equal(
-      userAccount2Before.amount + BigInt(40),
+      userAccount2Before.amount + BigInt(2),
       userAccount2After.amount
     );
 
@@ -376,13 +376,13 @@ describe("multidistribute", () => {
 
     // Distribution 1 vault should have fewer tokens
     assert.equal(
-      dist1VaultBefore.amount - BigInt(20),
+      dist1VaultBefore.amount - BigInt(1),
       dist1VaultAfter.amount
     );
 
     // Distribution 2 vault should have fewer tokens
     assert.equal(
-      dist2VaultBefore.amount - BigInt(40),
+      dist2VaultBefore.amount - BigInt(2),
       dist2VaultAfter.amount
     );
 
@@ -396,8 +396,8 @@ describe("multidistribute", () => {
     // Verify distribution states were updated
     const dist1Account = await program.account.distribution.fetch(distribution1);
     const dist2Account = await program.account.distribution.fetch(distribution2);
-    assert.equal(dist1Account.distributedTokens.toString(), "20");
-    assert.equal(dist2Account.distributedTokens.toString(), "40");
+    assert.equal(dist1Account.distributedTokens.toString(), "1");
+    assert.equal(dist2Account.distributedTokens.toString(), "2");
   });
 
   it("Withdraws tokens from collection", async () => {
