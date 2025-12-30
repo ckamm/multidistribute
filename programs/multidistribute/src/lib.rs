@@ -374,7 +374,7 @@ pub struct InitCollection<'info> {
 
     /// Associated token account owned by the collection PDA that holds deposited tokens
     #[account(
-        init,
+        init_if_needed,
         payer = authority,
         associated_token::mint = mint,
         associated_token::authority = collection
@@ -458,7 +458,7 @@ pub struct InitDistribution<'info> {
 
     /// Associated token account owned by the distribution PDA that holds tokens to distribute
     #[account(
-        init,
+        init_if_needed,
         payer = authority,
         associated_token::mint = mint,
         associated_token::authority = distribution
