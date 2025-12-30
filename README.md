@@ -26,10 +26,19 @@ MultiDistribute is a Solana program built with Anchor that lets you create token
 - **Collection** - Tracks configuration and state for a token collection including authority, total tokens collected, maximum deposit limit, vault, replacement mint, and burn configuration
 - **Distribution** - Manages token distribution for a collection including total tokens deposited, mint, vault and amount distributed
 
-
 ## Build and Test
 
 Initially built with Solana 1.18.26 and Anchor 0.28.0. Use `anchor test` to run the basic tests.
+
+## Risks
+
+With an immutable program and burn_tokens=true, the program should be safe against a malicious authority.
+Otherwise both the program upgrade authority and the collection authority must be trusted.
+
+- The program upgrade authority is in control of all the funds, both deposited tokens and to-be-distributed tokens.
+- If the deposited tokens aren't burned immediately, the collection authority could withdraw them and deposit them again in a loop, draining to-be-distributed tokens.
+- If deposited tokens are burned immediately, that mint's supply changes, which can have effects on the quorum of governance programs.
+- If tokens are added to a distribution late, after some users have already claimed, these users have no way of receiving the added tokens. Don't add tokens late.
 
 ## License
 
