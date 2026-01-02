@@ -19,11 +19,13 @@ pub mod multidistribute {
     ///
     /// # Arguments
     /// * `counter` - Unique counter value to allow multiple collections for the same mint
-    /// * `burn_tokens` - If true, committed tokens will be burned instead of stored in the vault
+    /// * `burn_on_deposit` - If true, committed tokens will be burned instead of stored in the vault
+    /// * `burn_instead_of_withdraw` - If true, withdraw_from_collection burns tokens instead of withdrawing
     pub fn init_collection(
         ctx: Context<InitCollection>,
         counter: u64,
-        burn_tokens: bool,
+        burn_on_deposit: bool,
+        burn_instead_of_withdraw: bool,
     ) -> Result<()> {
         let max_collectable_tokens = ctx.accounts.mint.supply;
         require!(
@@ -54,19 +56,21 @@ pub mod multidistribute {
         collection.replacement_mint = ctx.accounts.replacement_mint.key();
         collection.bump = *ctx.bumps.get("collection").unwrap();
         collection.counter = counter;
-        collection.burn_tokens = burn_tokens;
+        collection.burn_on_deposit = burn_on_deposit;
+        collection.burn_instead_of_withdraw = burn_instead_of_withdraw;
         collection.num_distributions = 0;
         collection.distributions = [Pubkey::default(); MAX_DISTRIBUTIONS];
         Ok(())
     }
 
-    /// Withdraws all tokens from the collection vault to the authority's token account.
+    /// Withdraws all tokens from the collection vault to the authority's token account,
+    /// or burns them if `burn_instead_of_withdraw` was set during collection initialization.
     ///
     /// Can only be called by the collection authority.
     pub fn withdraw_from_collection(ctx: Context<WithdrawFromCollection>) -> Result<()> {
         let collection = &ctx.accounts.collection;
+        let amount = ctx.accounts.vault.amount;
 
-        // Transfer tokens from collection vault to authority
         let counter_bytes = collection.counter.to_le_bytes();
         let authority_seeds = &[
             b"collection",
@@ -77,16 +81,31 @@ pub mod multidistribute {
         ];
         let signer = &[&authority_seeds[..]];
 
-        let transfer_ctx = CpiContext::new_with_signer(
-            ctx.accounts.token_program.to_account_info(),
-            Transfer {
-                from: ctx.accounts.vault.to_account_info(),
-                to: ctx.accounts.authority_token_account.to_account_info(),
-                authority: ctx.accounts.collection.to_account_info(),
-            },
-            signer,
-        );
-        token::transfer(transfer_ctx, ctx.accounts.vault.amount)?;
+        if collection.burn_instead_of_withdraw {
+            // Burn tokens from the vault
+            let burn_ctx = CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                token::Burn {
+                    mint: ctx.accounts.mint.to_account_info(),
+                    from: ctx.accounts.vault.to_account_info(),
+                    authority: ctx.accounts.collection.to_account_info(),
+                },
+                signer,
+            );
+            token::burn(burn_ctx, amount)?;
+        } else {
+            // Transfer tokens from collection vault to authority
+            let transfer_ctx = CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from: ctx.accounts.vault.to_account_info(),
+                    to: ctx.accounts.authority_token_account.to_account_info(),
+                    authority: ctx.accounts.collection.to_account_info(),
+                },
+                signer,
+            );
+            token::transfer(transfer_ctx, amount)?;
+        }
 
         Ok(())
     }
@@ -170,7 +189,7 @@ pub mod multidistribute {
         let collection = &ctx.accounts.collection;
 
         // Either burn or transfer the tokens
-        if collection.burn_tokens {
+        if collection.burn_on_deposit {
             let burn_ctx = CpiContext::new(
                 ctx.accounts.token_program.to_account_info(),
                 token::Burn {
@@ -409,6 +428,13 @@ pub struct WithdrawFromCollection<'info> {
     /// The collection to withdraw from
     pub collection: Box<Account<'info, Collection>>,
 
+    /// The SPL token mint (required for burning if burn_instead_of_withdraw is set)
+    #[account(
+        mut,
+        address = collection.mint
+    )]
+    pub mint: Account<'info, Mint>,
+
     /// The collection's vault, holding the tokens to withdraw
     #[account(
         mut,
@@ -416,10 +442,10 @@ pub struct WithdrawFromCollection<'info> {
     )]
     pub vault: Account<'info, TokenAccount>,
 
-    /// The token account to receive the withdrawn tokens
+    /// The token account to receive the withdrawn tokens (unused if burning)
     #[account(
         mut,
-        token::mint = vault.mint
+        token::mint = mint
     )]
     pub authority_token_account: Account<'info, TokenAccount>,
 
@@ -587,7 +613,9 @@ pub struct Collection {
     pub bump: u8,
     pub counter: u64,
     /// whether to burn input tokens instead of collecting them
-    pub burn_tokens: bool,
+    pub burn_on_deposit: bool,
+    /// whether withdraw_from_collection burns instead of withdrawing
+    pub burn_instead_of_withdraw: bool,
     /// number of registered distributions
     pub num_distributions: u8,
     /// registered distribution pubkeys (up to MAX_DISTRIBUTIONS)

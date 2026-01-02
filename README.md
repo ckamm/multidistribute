@@ -16,14 +16,14 @@ MultiDistribute is a Solana program built with Anchor that lets you create token
 ## Instructions
 
 - **init_collection** - Creates a new token collection with specified maximum deposit limit and burn configuration
-- **withdraw_from_collection** - Authority withdraws tokens from collection vault
+- **withdraw_from_collection** - Authority withdraws tokens from collection vault (or burns them if `burn_instead_of_withdraw` was set)
 - **init_distribution** - Creates a new distribution for rewarding collection depositors
 - **add_distribution_tokens** - Adds tokens to a distribution's reward pool
 - **user_commit_and_claim_stateless** - User commits tokens and claims their share of distribution rewards
 
 ## Program Accounts
 
-- **Collection** - Tracks configuration and state for a token collection including authority, total tokens collected, maximum deposit limit, vault, replacement mint, and burn configuration
+- **Collection** - Tracks configuration and state for a token collection including authority, total tokens collected, maximum deposit limit, vault, replacement mint, `burn_on_deposit` flag, and `burn_instead_of_withdraw` flag
 - **Distribution** - Manages token distribution for a collection including total tokens deposited, mint, vault and amount distributed
 
 ## Build and Test
@@ -32,11 +32,11 @@ Initially built with Solana 1.18.26 and Anchor 0.28.0. Use `anchor test` to run 
 
 ## Risks
 
-With an immutable program and burn_tokens=true, the program should be safe against a malicious authority.
+With an immutable program and burn_on_deposit=true, the program should be safe against a malicious authority.
 Otherwise both the program upgrade authority and the collection authority must be trusted.
 
 - The program upgrade authority is in control of all the funds, both deposited tokens and to-be-distributed tokens.
-- If the deposited tokens aren't burned immediately, the collection authority could withdraw them and deposit them again in a loop, draining to-be-distributed tokens.
+- If the deposited tokens aren't burned immediately, the collection authority could withdraw them and deposit them again in a loop, draining to-be-distributed tokens. Setting `burn_instead_of_withdraw=true` mitigates this risk by ensuring the authority can only burn (not withdraw and reuse) tokens from the vault.
 - If deposited tokens are burned immediately, that mint's supply changes, which can have effects on the quorum of governance programs.
 - If tokens are added to a distribution late, after some users have already claimed, these users have no way of receiving the added tokens. Don't add tokens late.
 
