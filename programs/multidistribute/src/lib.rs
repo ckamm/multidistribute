@@ -54,7 +54,7 @@ pub mod multidistribute {
         collection.mint = ctx.accounts.mint.key();
         collection.vault = ctx.accounts.vault.key();
         collection.replacement_mint = ctx.accounts.replacement_mint.key();
-        collection.bump = *ctx.bumps.get("collection").unwrap();
+        collection.bump = ctx.bumps.collection;
         collection.counter = counter;
         collection.burn_on_deposit = burn_on_deposit;
         collection.burn_instead_of_withdraw = burn_instead_of_withdraw;
@@ -130,7 +130,7 @@ pub mod multidistribute {
         distribution.mint = ctx.accounts.mint.key();
         distribution.vault = ctx.accounts.vault.key();
         distribution.distributed_tokens = 0;
-        distribution.bump = *ctx.bumps.get("distribution").unwrap();
+        distribution.bump = ctx.bumps.distribution;
 
         // Register the distribution in the collection
         let idx = collection.num_distributions as usize;
@@ -389,7 +389,7 @@ pub struct InitCollection<'info> {
     pub collection: Box<Account<'info, Collection>>,
 
     /// The SPL token mint for tokens being collected
-    pub mint: Account<'info, Mint>,
+    pub mint: Box<Account<'info, Mint>>,
 
     /// Associated token account owned by the collection PDA that holds deposited tokens
     #[account(
@@ -398,7 +398,7 @@ pub struct InitCollection<'info> {
         associated_token::mint = mint,
         associated_token::authority = collection
     )]
-    pub vault: Account<'info, TokenAccount>,
+    pub vault: Box<Account<'info, TokenAccount>>,
 
     /// Pre-created replacement mint.
     ///
@@ -411,7 +411,7 @@ pub struct InitCollection<'info> {
         constraint = replacement_mint.freeze_authority.is_none() @ ErrorCode::ReplacementMintHasFreezeAuthority,
         constraint = replacement_mint.decimals == mint.decimals @ ErrorCode::ReplacementMintDecimalsMismatch,
     )]
-    pub replacement_mint: Account<'info, Mint>,
+    pub replacement_mint: Box<Account<'info, Mint>>,
 
     /// The authority who can manage this collection and pays for these accounts
     #[account(mut)]

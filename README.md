@@ -28,7 +28,13 @@ MultiDistribute is a Solana program built with Anchor that lets you create token
 
 ## Build and Test
 
-Initially built with Solana 1.18.26 and Anchor 0.28.0. Use `anchor test` to run the basic tests.
+Built with Solana 2.2.15 and Anchor 0.30.1.
+
+- Build:`anchor build --no-idl`
+- Create IDL:`RUSTUP_TOOLCHAIN=nightly-2024-12-31 anchor idl build -o ../../target/idl/multidistribute.json -t ../../target/types/multidistribute.ts` in `programs/multidistribute/`.
+- Run tests:`anchor test --skip-build`.
+- Verifiable build `solana-verify build -b solanafoundation/solana-verifiable-build:2.2.15`, placed into target/deploy/
+
 
 ## Risks
 
