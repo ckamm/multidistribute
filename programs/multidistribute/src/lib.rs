@@ -21,11 +21,13 @@ pub mod multidistribute {
     /// * `counter` - Unique counter value to allow multiple collections for the same mint
     /// * `burn_on_deposit` - If true, committed tokens will be burned instead of stored in the vault
     /// * `burn_instead_of_withdraw` - If true, withdraw_from_collection burns tokens instead of withdrawing
+    /// * `terms_hash` - Hash of the terms of service that users must agree to when claiming
     pub fn init_collection(
         ctx: Context<InitCollection>,
         counter: u64,
         burn_on_deposit: bool,
         burn_instead_of_withdraw: bool,
+        terms_hash: [u8; 32],
     ) -> Result<()> {
         let max_collectable_tokens = ctx.accounts.mint.supply;
         require!(
@@ -58,6 +60,7 @@ pub mod multidistribute {
         collection.counter = counter;
         collection.burn_on_deposit = burn_on_deposit;
         collection.burn_instead_of_withdraw = burn_instead_of_withdraw;
+        collection.terms_hash = terms_hash;
         collection.num_distributions = 0;
         collection.distributions = [Pubkey::default(); MAX_DISTRIBUTIONS];
         Ok(())
@@ -176,6 +179,7 @@ pub mod multidistribute {
     ///
     /// # Arguments
     /// * `amount` - Number of tokens to commit to the collection
+    /// * `terms_hash` - Hash of the terms of service the user is agreeing to (must match collection's terms_hash)
     ///
     /// # Remaining Accounts
     /// For each distribution to claim from, provide 3 accounts in order:
@@ -185,8 +189,15 @@ pub mod multidistribute {
     pub fn user_commit_and_claim_stateless(
         ctx: Context<UserCommitAndClaimStateless>,
         amount: u64,
+        terms_hash: [u8; 32],
     ) -> Result<()> {
         let collection = &ctx.accounts.collection;
+
+        // Verify the user is agreeing to the correct terms
+        require!(
+            terms_hash == collection.terms_hash,
+            ErrorCode::TermsHashMismatch
+        );
 
         // Either burn or transfer the tokens
         if collection.burn_on_deposit {
@@ -616,6 +627,8 @@ pub struct Collection {
     pub burn_on_deposit: bool,
     /// whether withdraw_from_collection burns instead of withdrawing
     pub burn_instead_of_withdraw: bool,
+    /// hash of the terms of service that users must agree to
+    pub terms_hash: [u8; 32],
     /// number of registered distributions
     pub num_distributions: u8,
     /// registered distribution pubkeys (up to MAX_DISTRIBUTIONS)
@@ -676,4 +689,7 @@ pub enum ErrorCode {
 
     #[msg("Replacement mint decimals must match the collected mint")]
     ReplacementMintDecimalsMismatch,
+
+    #[msg("Terms hash does not match the collection's terms")]
+    TermsHashMismatch,
 }

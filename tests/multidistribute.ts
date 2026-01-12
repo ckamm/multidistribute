@@ -39,6 +39,9 @@ describe("multidistribute", () => {
   const user = anchor.web3.Keypair.generate();
   const authority = provider.wallet;
   const COUNTER = new anchor.BN(1);
+  // Example terms hash - in practice this would be a hash of the actual terms of service
+  const TERMS_HASH = Buffer.alloc(32);
+  TERMS_HASH.write("terms_of_service_v1", 0);
 
   before(async () => {
     // Airdrop SOL to user
@@ -197,7 +200,7 @@ describe("multidistribute", () => {
 
   it("Creates a collection", async () => {
     await program.methods
-      .initCollection(COUNTER, false, false)
+      .initCollection(COUNTER, false, false, Array.from(TERMS_HASH))
       .accounts({
         collection,
         mint: mint1,
@@ -217,6 +220,7 @@ describe("multidistribute", () => {
     // maxCollectableTokens is now set from mint supply (10000 + 10000 = 20000)
     assert.equal(collectionAccount.maxCollectableTokens.toString(), "20000");
     assert.equal(collectionAccount.burnInsteadOfWithdraw, false);
+    assert.deepEqual(collectionAccount.termsHash, Array.from(TERMS_HASH));
   });
 
   it("Creates distributions", async () => {
@@ -309,7 +313,7 @@ describe("multidistribute", () => {
     const COMMIT_AMOUNT = new anchor.BN(200);
 
     await program.methods
-      .userCommitAndClaimStateless(COMMIT_AMOUNT)
+      .userCommitAndClaimStateless(COMMIT_AMOUNT, Array.from(TERMS_HASH))
       .accounts({
         collection,
         mint: mint1,
@@ -401,6 +405,41 @@ describe("multidistribute", () => {
     assert.equal(dist2Account.distributedTokens.toString(), "2");
   });
 
+  it("Rejects claim with wrong terms hash", async () => {
+    const WRONG_TERMS_HASH = Buffer.alloc(32);
+    WRONG_TERMS_HASH.write("wrong_terms", 0);
+
+    try {
+      await program.methods
+        .userCommitAndClaimStateless(new anchor.BN(100), Array.from(WRONG_TERMS_HASH))
+        .accounts({
+          collection,
+          mint: mint1,
+          userTokenAccount: userTokenAccount1,
+          vault: collectionVault,
+          replacementMint: replacementMint,
+          userReplacementTokenAccount: userReplacementTokenAccount,
+          user: user.publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: anchor.web3.SystemProgram.programId,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        })
+        .remainingAccounts([
+          { pubkey: distribution1, isWritable: true, isSigner: false },
+          { pubkey: distribution1Vault, isWritable: true, isSigner: false },
+          { pubkey: userTokenAccount1, isWritable: true, isSigner: false },
+          { pubkey: distribution2, isWritable: true, isSigner: false },
+          { pubkey: distribution2Vault, isWritable: true, isSigner: false },
+          { pubkey: userTokenAccount2, isWritable: true, isSigner: false },
+        ])
+        .signers([user])
+        .rpc();
+      assert.fail("Expected transaction to fail with TermsHashMismatch");
+    } catch (err) {
+      assert.include(String(err), "TermsHashMismatch");
+    }
+  });
+
   it("Withdraws tokens from collection", async () => {
     // Check balances before withdrawal
     const vaultBeforeWithdraw = await getAccount(
@@ -460,6 +499,8 @@ describe("multidistribute - burn_instead_of_withdraw", () => {
   const user = anchor.web3.Keypair.generate();
   const authority = provider.wallet;
   const COUNTER = new anchor.BN(2); // Different counter to avoid collision
+  const TERMS_HASH = Buffer.alloc(32);
+  TERMS_HASH.write("terms_of_service_v1", 0);
 
   before(async () => {
     // Airdrop SOL to user
@@ -545,7 +586,7 @@ describe("multidistribute - burn_instead_of_withdraw", () => {
 
   it("Creates a collection with burn_instead_of_withdraw=true", async () => {
     await program.methods
-      .initCollection(COUNTER, false, true) // burn_instead_of_withdraw = true
+      .initCollection(COUNTER, false, true, Array.from(TERMS_HASH)) // burn_instead_of_withdraw = true
       .accounts({
         collection,
         mint: mint,
@@ -567,7 +608,7 @@ describe("multidistribute - burn_instead_of_withdraw", () => {
     const COMMIT_AMOUNT = new anchor.BN(500);
 
     await program.methods
-      .userCommitAndClaimStateless(COMMIT_AMOUNT)
+      .userCommitAndClaimStateless(COMMIT_AMOUNT, Array.from(TERMS_HASH))
       .accounts({
         collection,
         mint: mint,

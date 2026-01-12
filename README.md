@@ -7,6 +7,8 @@ MultiDistribute is a Solana program built with Anchor that lets you create token
 - **Collections:**
   An authority initializes a collection with a cap on the total tokens that can be deposited, usually based on the circulating amount of the token. The authority also sets up distributions of other tokens. Users commit tokens to the collection and receive replacement tokens in return as well as their share from the distributions. The collection can be configured to either store the committed tokens in a vault or burn them.
 
+  Each collection includes a `terms_hash` (32 bytes) set at initialization. When users claim, they must provide the same hash, creating on-chain proof of their agreement to the associated terms of service.
+
 - **Distributions:**
   The collection authority can set up a distribution associated with a collection. The distribution holds tokens that are later shared among the users who commit tokens into the collection.
 
@@ -15,15 +17,15 @@ MultiDistribute is a Solana program built with Anchor that lets you create token
 
 ## Instructions
 
-- **init_collection** - Creates a new token collection with specified maximum deposit limit and burn configuration
+- **init_collection** - Creates a new token collection with specified maximum deposit limit, burn configuration, and terms hash
 - **withdraw_from_collection** - Authority withdraws tokens from collection vault (or burns them if `burn_instead_of_withdraw` was set)
 - **init_distribution** - Creates a new distribution for rewarding collection depositors
 - **add_distribution_tokens** - Adds tokens to a distribution's reward pool
-- **user_commit_and_claim_stateless** - User commits tokens and claims their share of distribution rewards
+- **user_commit_and_claim_stateless** - User commits tokens and claims their share of distribution rewards (must provide matching terms hash)
 
 ## Program Accounts
 
-- **Collection** - Tracks configuration and state for a token collection including authority, total tokens collected, maximum deposit limit, vault, replacement mint, `burn_on_deposit` flag, and `burn_instead_of_withdraw` flag
+- **Collection** - Tracks configuration and state for a token collection including authority, total tokens collected, maximum deposit limit, vault, replacement mint, `burn_on_deposit` flag, `burn_instead_of_withdraw` flag, and `terms_hash`
 - **Distribution** - Manages token distribution for a collection including total tokens deposited, mint, vault and amount distributed
 
 ## Build and Test
