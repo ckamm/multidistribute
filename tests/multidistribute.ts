@@ -19,7 +19,7 @@ describe("multidistribute", () => {
   anchor.setProvider(provider);
 
   const program = anchor.workspace.Multidistribute as Program<Multidistribute>;
-  
+
   // We'll use these accounts throughout the tests
   let mint1: PublicKey;
   let mint2: PublicKey;
@@ -200,7 +200,7 @@ describe("multidistribute", () => {
 
   it("Creates a collection", async () => {
     await program.methods
-      .initCollection(COUNTER, false, false, Array.from(TERMS_HASH))
+      .initCollection(COUNTER, false, false, Array.from(TERMS_HASH), new anchor.BN(20000))
       .accounts({
         collection,
         mint: mint1,
@@ -280,7 +280,7 @@ describe("multidistribute", () => {
 
     const distribution1Account = await program.account.distribution.fetch(distribution1);
     const distribution2Account = await program.account.distribution.fetch(distribution2);
-    
+
     assert.equal(distribution1Account.lifetimeDepositedTokens.toString(), "100");
     assert.equal(distribution2Account.lifetimeDepositedTokens.toString(), "200");
   });
@@ -586,7 +586,7 @@ describe("multidistribute - burn_instead_of_withdraw", () => {
 
   it("Creates a collection with burn_instead_of_withdraw=true", async () => {
     await program.methods
-      .initCollection(COUNTER, false, true, Array.from(TERMS_HASH)) // burn_instead_of_withdraw = true
+      .initCollection(COUNTER, false, true, Array.from(TERMS_HASH), new anchor.BN(20000)) // burn_instead_of_withdraw = true
       .accounts({
         collection,
         mint: mint,
