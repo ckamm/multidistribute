@@ -186,8 +186,8 @@ pub mod multidistribute {
     /// - Distribution account (the Distribution PDA)
     /// - Distribution vault (the token account holding distribution tokens)
     /// - User's token account for this distribution's mint (to receive claimed tokens)
-    pub fn user_commit_and_claim_stateless(
-        ctx: Context<UserCommitAndClaimStateless>,
+    pub fn user_commit_and_claim_stateless<'info>(
+        ctx: Context<'_, '_, 'info, 'info, UserCommitAndClaimStateless<'info>>,
         amount: u64,
         terms_hash: [u8; 32],
     ) -> Result<()> {
@@ -279,6 +279,7 @@ pub mod multidistribute {
         let max_collectable_tokens = collection.max_collectable_tokens;
         let collection_key = collection.key();
         let token_program_key = ctx.accounts.token_program.key();
+        let token_program_info = ctx.accounts.token_program.to_account_info();
 
         for i in (0..remaining.len()).step_by(3) {
             let distribution_info = &remaining[i];
@@ -372,6 +373,7 @@ pub mod multidistribute {
                     distribution_vault_info.clone(),
                     user_dist_token_account_info.clone(),
                     distribution_info.clone(),
+                    token_program_info.clone(),
                 ],
                 &[distribution_seeds],
             )?;
