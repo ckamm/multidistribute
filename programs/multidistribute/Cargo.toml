@@ -21,3 +21,4 @@ custom-panic = []
 [dependencies]
 anchor-lang = { version = "0.30.1", features = ["init-if-needed"] }
 anchor-spl = "0.30.1"
+spl-associated-token-account = { version = "3", features = ["no-entrypoint"] }

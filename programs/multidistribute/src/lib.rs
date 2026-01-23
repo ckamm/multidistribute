@@ -1,11 +1,53 @@
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::program::invoke_signed;
+use anchor_lang::solana_program::program::{invoke, invoke_signed};
 use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token::spl_token;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
+use spl_associated_token_account::instruction::create_associated_token_account_idempotent;
 use std::mem::size_of;
 
 declare_id!("DisJzzeTrLXzJgtaaqBxcNKLrLFyc4mY3ELGCdEkVPzt");
+
+/// Creates an associated token account idempotently via CPI.
+/// Verifies the provided account address matches the expected ATA address.
+fn create_ata_idempotent<'info>(
+    expected_ata: &AccountInfo<'info>,
+    payer: &AccountInfo<'info>,
+    wallet: &AccountInfo<'info>,
+    mint: &AccountInfo<'info>,
+    system_program: &AccountInfo<'info>,
+    token_program: &AccountInfo<'info>,
+    associated_token_program: &AccountInfo<'info>,
+) -> Result<()> {
+    let expected_address = anchor_spl::associated_token::get_associated_token_address(
+        wallet.key,
+        mint.key,
+    );
+    require!(
+        expected_ata.key() == expected_address,
+        ErrorCode::InvalidVaultAddress
+    );
+
+    let ix = create_associated_token_account_idempotent(
+        payer.key,
+        wallet.key,
+        mint.key,
+        token_program.key,
+    );
+    invoke(
+        &ix,
+        &[
+            payer.clone(),
+            expected_ata.clone(),
+            wallet.clone(),
+            mint.clone(),
+            system_program.clone(),
+            token_program.clone(),
+            associated_token_program.clone(),
+        ],
+    )?;
+    Ok(())
+}
 
 #[program]
 pub mod multidistribute {
@@ -36,19 +78,36 @@ pub mod multidistribute {
             ErrorCode::InvalidMaxCollectableTokens
         );
 
-        // Transfer mint authority from the authority signer to the collection PDA
-        let set_authority_ctx = CpiContext::new(
+        create_ata_idempotent(
+            &ctx.accounts.vault.to_account_info(),
+            &ctx.accounts.authority.to_account_info(),
+            &ctx.accounts.collection.to_account_info(),
+            &ctx.accounts.mint.to_account_info(),
+            &ctx.accounts.system_program.to_account_info(),
+            &ctx.accounts.token_program.to_account_info(),
+            &ctx.accounts.associated_token_program.to_account_info(),
+        )?;
+
+        create_ata_idempotent(
+            &ctx.accounts.replacement_vault.to_account_info(),
+            &ctx.accounts.authority.to_account_info(),
+            &ctx.accounts.collection.to_account_info(),
+            &ctx.accounts.replacement_mint.to_account_info(),
+            &ctx.accounts.system_program.to_account_info(),
+            &ctx.accounts.token_program.to_account_info(),
+            &ctx.accounts.associated_token_program.to_account_info(),
+        )?;
+
+        // Transfer replacement tokens from authority to the replacement vault
+        let transfer_ctx = CpiContext::new(
             ctx.accounts.token_program.to_account_info(),
-            token::SetAuthority {
-                current_authority: ctx.accounts.authority.to_account_info(),
-                account_or_mint: ctx.accounts.replacement_mint.to_account_info(),
+            Transfer {
+                from: ctx.accounts.authority_replacement_token_account.to_account_info(),
+                to: ctx.accounts.replacement_vault.to_account_info(),
+                authority: ctx.accounts.authority.to_account_info(),
             },
         );
-        token::set_authority(
-            set_authority_ctx,
-            token::spl_token::instruction::AuthorityType::MintTokens,
-            Some(ctx.accounts.collection.key()),
-        )?;
+        token::transfer(transfer_ctx, max_collectable_tokens)?;
 
         let collection = &mut ctx.accounts.collection;
         collection.authority = ctx.accounts.authority.key();
@@ -57,6 +116,7 @@ pub mod multidistribute {
         collection.mint = ctx.accounts.mint.key();
         collection.vault = ctx.accounts.vault.key();
         collection.replacement_mint = ctx.accounts.replacement_mint.key();
+        collection.replacement_vault = ctx.accounts.replacement_vault.key();
         collection.bump = ctx.bumps.collection;
         collection.counter = counter;
         collection.burn_on_deposit = burn_on_deposit;
@@ -223,7 +283,17 @@ pub mod multidistribute {
             token::transfer(transfer_ctx, amount)?;
         }
 
-        // Mint replacement tokens to user
+        create_ata_idempotent(
+            &ctx.accounts.user_replacement_token_account.to_account_info(),
+            &ctx.accounts.user.to_account_info(),
+            &ctx.accounts.user.to_account_info(),
+            &ctx.accounts.replacement_mint.to_account_info(),
+            &ctx.accounts.system_program.to_account_info(),
+            &ctx.accounts.token_program.to_account_info(),
+            &ctx.accounts.associated_token_program.to_account_info(),
+        )?;
+
+        // Transfer replacement tokens from vault to user
         let counter_bytes = collection.counter.to_le_bytes();
         let collection_seeds = &[
             b"collection",
@@ -234,10 +304,10 @@ pub mod multidistribute {
         ];
         let collection_signer = &[&collection_seeds[..]];
 
-        let mint_ctx = CpiContext::new_with_signer(
+        let transfer_replacement_ctx = CpiContext::new_with_signer(
             ctx.accounts.token_program.to_account_info(),
-            token::MintTo {
-                mint: ctx.accounts.replacement_mint.to_account_info(),
+            Transfer {
+                from: ctx.accounts.replacement_vault.to_account_info(),
                 to: ctx
                     .accounts
                     .user_replacement_token_account
@@ -246,7 +316,7 @@ pub mod multidistribute {
             },
             collection_signer,
         );
-        token::mint_to(mint_ctx, amount)?;
+        token::transfer(transfer_replacement_ctx, amount)?;
 
         // Update collection state
         let collection = &mut ctx.accounts.collection;
@@ -405,27 +475,32 @@ pub struct InitCollection<'info> {
     /// The SPL token mint for tokens being collected
     pub mint: Box<Account<'info, Mint>>,
 
-    /// Associated token account owned by the collection PDA that holds deposited tokens
-    #[account(
-        init_if_needed,
-        payer = authority,
-        associated_token::mint = mint,
-        associated_token::authority = collection
-    )]
-    pub vault: Box<Account<'info, TokenAccount>>,
+    /// CHECK: Created via CPI to associated token program's create_idempotent instruction.
+    /// Address is verified in the handler to be the correct ATA.
+    #[account(mut)]
+    pub vault: UncheckedAccount<'info>,
 
-    /// Pre-created replacement mint.
+    /// Pre-created replacement mint with pre-minted tokens.
     ///
-    /// Mint authority will be taken over, metadata must have been
-    /// initialized in advance.
+    /// Tokens will be transferred from authority_replacement_token_account
+    /// to the replacement_vault during initialization.
     #[account(
-        mut,
-        constraint = replacement_mint.supply == 0 @ ErrorCode::ReplacementMintHasSupply,
-        constraint = replacement_mint.mint_authority.contains(&authority.key()) @ ErrorCode::ReplacementMintAuthorityMismatch,
         constraint = replacement_mint.freeze_authority.is_none() @ ErrorCode::ReplacementMintHasFreezeAuthority,
         constraint = replacement_mint.decimals == mint.decimals @ ErrorCode::ReplacementMintDecimalsMismatch,
     )]
     pub replacement_mint: Box<Account<'info, Mint>>,
+
+    /// Token account holding pre-minted replacement tokens to transfer
+    #[account(
+        mut,
+        token::mint = replacement_mint
+    )]
+    pub authority_replacement_token_account: Box<Account<'info, TokenAccount>>,
+
+    /// CHECK: Created via CPI to associated token program's create_idempotent instruction.
+    /// Address is verified in the handler to be the correct ATA.
+    #[account(mut)]
+    pub replacement_vault: UncheckedAccount<'info>,
 
     /// The authority who can manage this collection and pays for these accounts
     #[account(mut)]
@@ -584,21 +659,23 @@ pub struct UserCommitAndClaimStateless<'info> {
     )]
     pub vault: Account<'info, TokenAccount>,
 
-    /// The replacement mint owned by the collection
+    /// The replacement mint for the collection
     #[account(
-        mut,
         address = collection.replacement_mint
     )]
     pub replacement_mint: Account<'info, Mint>,
 
-    /// The user's token account to receive replacement tokens
+    /// The vault holding pre-minted replacement tokens
     #[account(
-        init_if_needed,
-        payer = user,
-        associated_token::mint = replacement_mint,
-        associated_token::authority = user
+        mut,
+        address = collection.replacement_vault
     )]
-    pub user_replacement_token_account: Account<'info, TokenAccount>,
+    pub replacement_vault: Account<'info, TokenAccount>,
+
+    /// CHECK: Created via CPI to associated token program's create_idempotent instruction.
+    /// Address is verified in the handler to be the correct ATA.
+    #[account(mut)]
+    pub user_replacement_token_account: UncheckedAccount<'info>,
 
     /// The user committing tokens
     #[account(mut)]
@@ -624,6 +701,8 @@ pub struct Collection {
     pub mint: Pubkey,
     pub vault: Pubkey,
     pub replacement_mint: Pubkey,
+    /// vault holding pre-minted replacement tokens to be distributed to users
+    pub replacement_vault: Pubkey,
     pub bump: u8,
     pub counter: u64,
     /// whether to burn input tokens instead of collecting them
@@ -681,12 +760,6 @@ pub enum ErrorCode {
     #[msg("Must provide all registered distributions in the correct order")]
     DistributionsMismatch,
 
-    #[msg("Replacement mint must have zero supply")]
-    ReplacementMintHasSupply,
-
-    #[msg("Replacement mint authority must be the collection authority")]
-    ReplacementMintAuthorityMismatch,
-
     #[msg("Replacement mint must have freeze authority disabled")]
     ReplacementMintHasFreezeAuthority,
 
@@ -695,4 +768,7 @@ pub enum ErrorCode {
 
     #[msg("Terms hash does not match the collection's terms")]
     TermsHashMismatch,
+
+    #[msg("Vault address does not match expected ATA")]
+    InvalidVaultAddress,
 }

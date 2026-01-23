@@ -30,6 +30,8 @@ describe("multidistribute", () => {
   let collection: PublicKey;
   let collectionVault: PublicKey;
   let replacementMint: PublicKey;
+  let authorityReplacementTokenAccount: PublicKey;
+  let replacementVault: PublicKey;
   let userReplacementTokenAccount: PublicKey;
   let distribution1: PublicKey;
   let distribution1Vault: PublicKey;
@@ -136,13 +138,31 @@ describe("multidistribute", () => {
     );
 
     // Create replacement mint (pre-created, not a PDA)
-    // Must have: decimals matching mint1, authority as mint_authority, no freeze_authority
+    // Must have: decimals matching mint1, no freeze_authority
     replacementMint = await createMint(
       provider.connection,
       authority.payer,
-      authority.publicKey, // mintAuthority - will be transferred to collection PDA
+      authority.publicKey, // mintAuthority - stays with authority
       null, // freezeAuthority - must be null
       6 // decimals - must match mint1
+    );
+
+    // Create authority token account for replacement mint and mint tokens
+    authorityReplacementTokenAccount = await createAccount(
+      provider.connection,
+      authority.payer,
+      replacementMint,
+      authority.publicKey
+    );
+
+    // Pre-mint replacement tokens (20000 to match max_collectable_tokens)
+    await mintTo(
+      provider.connection,
+      authority.payer,
+      replacementMint,
+      authorityReplacementTokenAccount,
+      authority.publicKey,
+      20000
     );
 
     // Derive PDAs
@@ -158,6 +178,12 @@ describe("multidistribute", () => {
 
     collectionVault = await getAssociatedTokenAddress(
       mint1,
+      collection,
+      true // allowOwnerOffCurve: true since collection is a PDA
+    );
+
+    replacementVault = await getAssociatedTokenAddress(
+      replacementMint,
       collection,
       true // allowOwnerOffCurve: true since collection is a PDA
     );
@@ -206,6 +232,8 @@ describe("multidistribute", () => {
         mint: mint1,
         vault: collectionVault,
         replacementMint,
+        authorityReplacementTokenAccount,
+        replacementVault,
         authority: authority.publicKey,
         systemProgram: anchor.web3.SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
@@ -320,6 +348,7 @@ describe("multidistribute", () => {
         userTokenAccount: userTokenAccount1,
         vault: collectionVault,
         replacementMint: replacementMint,
+        replacementVault: replacementVault,
         userReplacementTokenAccount: userReplacementTokenAccount,
         user: user.publicKey,
         tokenProgram: TOKEN_PROGRAM_ID,
@@ -418,6 +447,7 @@ describe("multidistribute", () => {
           userTokenAccount: userTokenAccount1,
           vault: collectionVault,
           replacementMint: replacementMint,
+          replacementVault: replacementVault,
           userReplacementTokenAccount: userReplacementTokenAccount,
           user: user.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
@@ -494,6 +524,8 @@ describe("multidistribute - burn_instead_of_withdraw", () => {
   let collection: PublicKey;
   let collectionVault: PublicKey;
   let replacementMint: PublicKey;
+  let authorityReplacementTokenAccount: PublicKey;
+  let replacementVault: PublicKey;
   let userReplacementTokenAccount: PublicKey;
 
   const user = anchor.web3.Keypair.generate();
@@ -561,6 +593,24 @@ describe("multidistribute - burn_instead_of_withdraw", () => {
       6
     );
 
+    // Create authority token account for replacement mint and mint tokens
+    authorityReplacementTokenAccount = await createAccount(
+      provider.connection,
+      authority.payer,
+      replacementMint,
+      authority.publicKey
+    );
+
+    // Pre-mint replacement tokens (20000 to match max_collectable_tokens)
+    await mintTo(
+      provider.connection,
+      authority.payer,
+      replacementMint,
+      authorityReplacementTokenAccount,
+      authority.publicKey,
+      20000
+    );
+
     // Derive PDAs
     [collection] = await PublicKey.findProgramAddress(
       [
@@ -574,6 +624,12 @@ describe("multidistribute - burn_instead_of_withdraw", () => {
 
     collectionVault = await getAssociatedTokenAddress(
       mint,
+      collection,
+      true
+    );
+
+    replacementVault = await getAssociatedTokenAddress(
+      replacementMint,
       collection,
       true
     );
@@ -592,6 +648,8 @@ describe("multidistribute - burn_instead_of_withdraw", () => {
         mint: mint,
         vault: collectionVault,
         replacementMint,
+        authorityReplacementTokenAccount,
+        replacementVault,
         authority: authority.publicKey,
         systemProgram: anchor.web3.SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
@@ -615,6 +673,7 @@ describe("multidistribute - burn_instead_of_withdraw", () => {
         userTokenAccount: userTokenAccount,
         vault: collectionVault,
         replacementMint: replacementMint,
+        replacementVault: replacementVault,
         userReplacementTokenAccount: userReplacementTokenAccount,
         user: user.publicKey,
         tokenProgram: TOKEN_PROGRAM_ID,
